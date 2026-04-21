@@ -22,7 +22,8 @@ streamlit run app.py
 - Converts millimetres to metres internally.
 - Generates three different 2D rectangular layout options.
 - Tries to fit the full requested internal targets of 1250 m² Trading Area and 130 m² Offices whenever the building can physically support them.
+- Uses a fixed Cashbuild frontage opening sequence, 2400 mm opening clearances at the actual openings, and simple POS zones in the frontage gaps.
 - Scores and sorts the options from best to worst.
 - Draws each option with the building footprint, labels, area values, and validation results.
 
-For this MVP, the input width and depth describe the internal building footprint only. Trading Area and Offices stay inside the building, while Yard and Off-loading Yard are drawn outside the building on the service side.
+For this MVP, the input width and depth describe the internal building footprint only. Trading Area and Offices stay inside the building, while Yard and Off-loading Yard are drawn outside the building on the service side. Frontage opening positions stay fixed in mm from the left inside wall of the entrance side.

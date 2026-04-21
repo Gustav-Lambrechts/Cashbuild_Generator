@@ -109,11 +109,7 @@ def outside_building(rectangle: Rectangle, building_width: float, building_depth
     return not (x_overlap > EPSILON and y_overlap > EPSILON)
 
 
-def projection_overlap_on_side(
-    rect_a: Rectangle,
-    rect_b: Rectangle,
-    side: str,
-) -> float:
+def projection_overlap_on_side(rect_a: Rectangle, rect_b: Rectangle, side: str) -> float:
     if side in {"north", "south"}:
         return overlap_length(rect_a.x, rect_a.right, rect_b.x, rect_b.right)
     return overlap_length(rect_a.y, rect_a.top, rect_b.y, rect_b.top)
@@ -157,8 +153,47 @@ def make_check(rule: str, passed: bool, detail: str, category: str = "hard") -> 
     }
 
 
+def trading_connects_to_frontage(
+    trading: Rectangle,
+    pos_zones: list[Rectangle],
+    frontage_openings: list[dict[str, object]],
+    entrance_side: str,
+    building_width: float,
+    building_depth: float,
+    support_depth: float,
+) -> bool:
+    if entrance_side == "north":
+        touches_support = abs(trading.top - (building_depth - support_depth)) < EPSILON
+    elif entrance_side == "south":
+        touches_support = abs(trading.y - support_depth) < EPSILON
+    elif entrance_side == "east":
+        touches_support = abs(trading.right - (building_width - support_depth)) < EPSILON
+    else:
+        touches_support = abs(trading.x - support_depth) < EPSILON
+
+    if not touches_support:
+        return False
+
+    for pos_zone in pos_zones:
+        if share_edge(trading, pos_zone):
+            return True
+
+    for opening in frontage_openings:
+        if opening["axis"] == "horizontal":
+            overlap = overlap_length(trading.x, trading.right, opening["range_start_m"], opening["range_end_m"])
+        else:
+            overlap = overlap_length(trading.y, trading.top, opening["range_start_m"], opening["range_end_m"])
+        if overlap > EPSILON:
+            return True
+
+    return False
+
+
 def validate_layout(
     rectangles: list[Rectangle],
+    pos_zones: list[Rectangle],
+    frontage_openings: list[dict[str, object]],
+    frontage_summary: dict[str, object],
     building_width: float,
     building_depth: float,
     entrance_side: str,
@@ -174,16 +209,29 @@ def validate_layout(
     yard = rectangle_map["Yard"]
     offloading = rectangle_map["Off-loading Yard"]
 
-    internal_rectangles = [rectangle for rectangle in rectangles if rectangle.internal]
+    internal_rectangles = [rectangle for rectangle in rectangles if rectangle.internal] + pos_zones
     external_rectangles = [rectangle for rectangle in rectangles if not rectangle.internal]
+    floor_rectangles = rectangles + pos_zones
     building_area = building_width * building_depth
-    actual_internal_area = sum(rectangle.area for rectangle in internal_rectangles)
+    actual_internal_area = sum(rectangle.area for rectangle in rectangles if rectangle.internal)
+    opening_clearances = frontage_summary["opening_clearance_rects"]
+
+    checks.append(
+        make_check(
+            "Frontage opening sequence fits on the entrance wall",
+            bool(frontage_summary["frontage_fits"]),
+            (
+                f"Entrance wall length is {frontage_summary['entrance_wall_length_m']:.2f} m and the fixed frontage "
+                f"needs {frontage_summary['required_frontage_length_m']:.2f} m."
+            ),
+        )
+    )
 
     checks.append(
         make_check(
             "Internal spaces fit inside the building footprint",
             all(within_building(rectangle, building_width, building_depth) for rectangle in internal_rectangles),
-            "Trading Area and Offices stay inside the building footprint.",
+            "Trading Area, Offices, and POS zones stay inside the building footprint.",
         )
     )
 
@@ -195,16 +243,42 @@ def validate_layout(
         )
     )
 
-    overlaps_found = any(
-        overlaps(rectangles[index], rectangles[other_index])
-        for index in range(len(rectangles))
-        for other_index in range(index + 1, len(rectangles))
-    )
+    overlaps_found = False
+    for index in range(len(floor_rectangles)):
+        for other_index in range(index + 1, len(floor_rectangles)):
+            rect_a = floor_rectangles[index]
+            rect_b = floor_rectangles[other_index]
+            trading_pos_pair = (
+                rect_a.label == "Trading Area" and rect_b.label.startswith("POS Zone")
+            ) or (
+                rect_b.label == "Trading Area" and rect_a.label.startswith("POS Zone")
+            )
+            if trading_pos_pair:
+                continue
+            if overlaps(rect_a, rect_b):
+                overlaps_found = True
+                break
+        if overlaps_found:
+            break
     checks.append(
         make_check(
             "Rectangles do not overlap",
             not overlaps_found,
-            "Spaces use separate footprints with shared edges only.",
+            "Main spaces and POS zones use separate footprints with shared edges only.",
+        )
+    )
+
+    opening_clearance_conflict = any(
+        overlaps(clearance, rectangle)
+        for clearance in opening_clearances
+        for rectangle in floor_rectangles
+        if rectangle.label != "Trading Area"
+    )
+    checks.append(
+        make_check(
+            "Opening clearances are preserved",
+            not opening_clearance_conflict,
+            f"A {frontage_summary['opening_clearance_depth_m']:.2f} m internal clearance remains open at each frontage opening.",
         )
     )
 
@@ -216,11 +290,25 @@ def validate_layout(
         )
     )
 
-    yard_aligned_with_trading = (
-        touches_boundary(trading, service_side, building_width, building_depth)
-        and touches_building_side(yard, service_side, building_width, building_depth)
-        and projection_overlap_on_side(trading, yard, service_side) > EPSILON
+    checks.append(
+        make_check(
+            "Trading Area connects to frontage openings",
+            trading_connects_to_frontage(
+                trading,
+                pos_zones,
+                frontage_openings,
+                entrance_side,
+                building_width,
+                building_depth,
+                frontage_summary["support_depth_m"],
+            ),
+            "Trading Area sits directly behind the entrance support zone and overlaps at least one frontage opening span.",
+        )
     )
+
+    yard_aligned_with_trading = touches_building_side(
+        yard, service_side, building_width, building_depth
+    ) and projection_overlap_on_side(trading, yard, service_side) > EPSILON
     checks.append(
         make_check(
             "Yard touches the building on the service side aligned with Trading Area",
@@ -245,14 +333,6 @@ def validate_layout(
         )
     )
 
-    checks.append(
-        make_check(
-            "Trading Area touches the entrance side",
-            touches_boundary(trading, entrance_side, building_width, building_depth),
-            "Trading Area connects directly to the entrance-side building boundary.",
-        )
-    )
-
     grouped_on_service_side = is_grouped_on_service_side(
         yard, service_side, building_width, building_depth
     ) and is_grouped_on_service_side(offloading, service_side, building_width, building_depth)
@@ -272,11 +352,23 @@ def validate_layout(
         )
     )
 
+    checks.append(
+        make_check(
+            "POS zones were placed in the required frontage gaps",
+            frontage_summary["pos_zone_count"] == frontage_summary["required_pos_zone_count"],
+            (
+                f"Placed {frontage_summary['pos_zone_count']} POS zones for "
+                f"{frontage_summary['required_pos_zone_count']} required frontage gaps."
+            ),
+            category="quality",
+        )
+    )
+
     internal_area_reduced = actual_internal_area + EPSILON < requested_internal_area
     if internal_area_reduced:
         detail = (
             f"Internal areas were reduced to {actual_internal_area:.1f} m² from the requested "
-            f"{requested_internal_area:.1f} m². {reduction_reason or 'The building could not fit the full internal targets while keeping the hard rules.'}"
+            f"{requested_internal_area:.1f} m². {reduction_reason or 'The building could not fit the full internal targets while keeping the frontage and hard rules.'}"
         )
     else:
         detail = (
@@ -348,9 +440,9 @@ def score_layout(
         if check["rule"]
         in {
             "Trading Area touches Offices",
+            "Trading Area connects to frontage openings",
             "Yard touches the building on the service side aligned with Trading Area",
             "Off-loading Yard touches Yard",
-            "Yard cluster stays grouped on the service side",
         }
     ]
     adjacency_score = sum(bool(check["passed"]) for check in adjacency_checks) / max(len(adjacency_checks), 1)
@@ -358,7 +450,12 @@ def score_layout(
     entrance_checks = [
         check
         for check in checks
-        if check["rule"] in {"Trading Area touches the entrance side", "Offices avoid the entrance side"}
+        if check["rule"]
+        in {
+            "Frontage opening sequence fits on the entrance wall",
+            "Entrance clear strip is preserved",
+            "Offices avoid the entrance side",
+        }
     ]
     entrance_score = sum(bool(check["passed"]) for check in entrance_checks) / max(len(entrance_checks), 1)
 

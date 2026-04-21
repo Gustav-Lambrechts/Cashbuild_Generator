@@ -18,7 +18,7 @@ st.set_page_config(page_title="Cashbuild Layout Generator MVP", layout="wide")
 
 st.title("Cashbuild Layout Generator MVP")
 st.write(
-    "Generate three rectangular concept layouts for a Cashbuild-style building footprint with attached external support spaces."
+    "Generate three rectangular concept layouts for a Cashbuild-style building footprint with fixed frontage openings and attached external support spaces."
 )
 
 with st.sidebar:
@@ -33,7 +33,8 @@ building_depth_m = mm_to_m(depth_mm)
 
 st.caption(
     f"Using a building footprint of {building_width_m:.2f} m x {building_depth_m:.2f} m. "
-    "Trading Area and Offices are internal. Yard and Off-loading Yard are external."
+    "Trading Area and Offices are internal. Yard and Off-loading Yard are external. "
+    "Frontage openings stay fixed in mm from the left inside wall of the entrance side, and POS sits in the frontage gaps."
 )
 
 options = generate_layout_options(
@@ -51,6 +52,9 @@ for option in options:
         building_width=building_width_m,
         building_depth=building_depth_m,
         title=f"{option['name']} plan",
+        frontage_openings=option["frontage_openings"],
+        pos_zones=option["pos_zones"],
+        frontage_summary=option["frontage_summary"],
     )
     st.pyplot(figure, clear_figure=True)
 
@@ -66,6 +70,19 @@ for option in options:
         ]
     )
 
+    frontage_summary = option["frontage_summary"]
+    st.table(
+        [
+            {
+                "Entrance wall length (m)": f"{frontage_summary['entrance_wall_length_m']:.2f}",
+                "Required frontage length (m)": f"{frontage_summary['required_frontage_length_m']:.2f}",
+                "Opening clearance depth (m)": f"{frontage_summary['opening_clearance_depth_m']:.2f}",
+                "POS zone depth (m)": f"{frontage_summary['pos_zone_depth_m']:.2f}",
+                "POS zones placed": f"{frontage_summary['pos_zone_count']}/{frontage_summary['required_pos_zone_count']}",
+            }
+        ]
+    )
+
     summary_rows = [
         {
             "Space": rectangle.label,
@@ -77,6 +94,18 @@ for option in options:
         for rectangle in option["rectangles"]
     ]
     st.table(summary_rows)
+
+    if option["pos_zones"]:
+        pos_rows = [
+            {
+                "POS Zone": rectangle.label,
+                "Area (m²)": f"{rectangle.area:.1f}",
+                "Position": f"x={rectangle.x:.1f}, y={rectangle.y:.1f}",
+                "Size": f"{rectangle.width:.1f} x {rectangle.depth:.1f} m",
+            }
+            for rectangle in option["pos_zones"]
+        ]
+        st.table(pos_rows)
 
     validation_rows = [
         {
