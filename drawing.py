@@ -7,9 +7,16 @@ from constraints import Rectangle
 
 COLORS = {
     "Trading Area": "#e7b24c",
-    "Offices": "#4f7cac",
+    "Admin Block": "#4f7cac",
+    "Goods Receiving": "#7f5539",
     "Yard": "#68a357",
     "Off-loading Yard": "#c96b4a",
+    "Parking": "#9ea7b3",
+    "Passage": "#d7e3f2",
+    "Cash Office": "#88a9c3",
+    "Male Toilets / Change": "#8fc1b5",
+    "Female Toilets / Change": "#b7d7c8",
+    "Canteen": "#f2c57c",
     "POS Zone": "#d8b56a",
     "Clear Strip": "#d9d9d9",
 }
@@ -63,24 +70,32 @@ def draw_layout_option(
         )
 
     for rectangle in rectangles:
+        edge_color = "#1f1f1f"
+        line_width = 1.5
+        fill_alpha = 0.8
+        if rectangle.label == "Admin Block":
+            edge_color = "#27496d"
+            line_width = 2.0
+            fill_alpha = 0.25
+
         axis.add_patch(
             PatchRectangle(
                 (rectangle.x, rectangle.y),
                 rectangle.width,
                 rectangle.depth,
-                facecolor=COLORS[rectangle.label],
-                edgecolor="#1f1f1f",
-                linewidth=1.5,
-                alpha=0.8,
+                facecolor=COLORS.get(rectangle.label, "#cccccc"),
+                edgecolor=edge_color,
+                linewidth=line_width,
+                alpha=fill_alpha,
             )
         )
         axis.text(
             rectangle.x + (rectangle.width / 2.0),
             rectangle.y + (rectangle.depth / 2.0),
-            f"{rectangle.label}\n{rectangle.area:.1f} m²",
+            format_label(rectangle),
             ha="center",
             va="center",
-            fontsize=10,
+            fontsize=9 if rectangle.label not in {"Passage", "Cash Office", "Male Toilets / Change", "Female Toilets / Change", "Canteen"} else 8,
             color="#111111",
             wrap=True,
         )
@@ -158,3 +173,15 @@ def draw_layout_option(
     axis.grid(True, linestyle="--", alpha=0.25)
 
     return figure
+
+
+def format_label(rectangle: Rectangle) -> str:
+    short_labels = {
+        "Male Toilets / Change": "Male WC /\nChange",
+        "Female Toilets / Change": "Female WC /\nChange",
+        "Off-loading Yard": "Off-loading\nYard",
+        "Goods Receiving": "Goods\nReceiving",
+        "Cash Office": "Cash\nOffice",
+    }
+    label = short_labels.get(rectangle.label, rectangle.label)
+    return f"{label}\n{rectangle.area:.1f} m²"
