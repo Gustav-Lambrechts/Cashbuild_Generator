@@ -4,8 +4,10 @@ from dataclasses import dataclass
 from typing import Iterable
 
 from cashbuild_spec import cashbuild_spec
+from config import template_standards
 
 EPSILON = 1e-6
+STANDARDS = template_standards()
 
 SPACE_BY_NAME = {space["name"]: space for space in cashbuild_spec["spaces"]}
 TARGET_AREAS_M2 = {
@@ -16,7 +18,10 @@ TARGET_AREAS_M2 = {
     "Parking": 550.0,
 }
 MIN_DIMENSIONS_M = {
-    "Trading Area": {"width": 10.0, "depth": 10.0},
+    "Trading Area": {
+        "width": STANDARDS["trading_compact_dimensions_m"][0],
+        "depth": min(STANDARDS["trading_compact_dimensions_m"][1], STANDARDS["trading_preferred_dimensions_m"][1]),
+    },
     "Admin Block": {"width": 4.0, "depth": 4.0},
     "Goods Receiving": {"width": 4.0, "depth": 4.0},
     "Yard": {"width": 6.0},

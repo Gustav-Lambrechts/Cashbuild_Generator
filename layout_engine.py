@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from cashbuild_spec import cashbuild_spec
+from config import template_standards
 from constraints import Rectangle, TARGET_AREAS_M2, score_layout, validate_layout
 
 SIDES = ["north", "south", "east", "west"]
 POSITIONS = ["left", "middle", "right"]
 EPSILON = 1e-6
-BAND_DEPTH_M = 6.23
+STANDARDS = template_standards()
+BAND_DEPTH_M = STANDARDS["service_band_depth_m"]
 
 SPACE_BY_NAME = {space["name"]: space for space in cashbuild_spec["spaces"]}
 

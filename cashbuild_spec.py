@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from config import template_standards
+
+STANDARDS = template_standards()
 
 cashbuild_spec = {
     "meta": {
@@ -25,14 +28,16 @@ cashbuild_spec = {
     "global_rules": {
         "structure": {
             "trading_floor_clear_span_required": True,
-            "trading_floor_min_internal_area_m2": 1080,
-            "trading_floor_target_internal_area_m2": 1200,
-            "trading_floor_preferred_dimensions_m": [30, 36],
+            "trading_floor_min_internal_area_m2": STANDARDS["trading_minimum_area_m2"],
+            "trading_floor_target_internal_area_m2": STANDARDS["trading_ideal_area_m2"],
+            "trading_floor_preferred_dimensions_m": STANDARDS["trading_preferred_dimensions_m"],
+            "trading_floor_compact_dimensions_m": STANDARDS["trading_compact_dimensions_m"],
             "trading_floor_lowest_truss_height_m": 6.0
         },
 
         "admin_block": {
-            "target_area_m2": 130,
+            "target_area_m2": STANDARDS["admin_target_area_m2"],
+            "preferred_depth_range_m": STANDARDS["admin_preferred_depth_range_m"],
             "allowed_configurations": ["single_storey", "double_storey"],
             "must_be_attached_to_main_building_side": True,
             "internal_access_required": True,
@@ -47,7 +52,7 @@ cashbuild_spec = {
 
         "yard": {
             "required": True,
-            "minimum_area_m2": 900,
+            "minimum_area_m2": STANDARDS["yard_minimum_area_m2"],
             "must_be_fenced": True,
             "minimum_fence_height_m": 2.4,
             "bin_area_min_m2": 17,
@@ -60,7 +65,7 @@ cashbuild_spec = {
 
         "off_loading": {
             "required": True,
-            "minimum_area_m2": 450,
+            "minimum_area_m2": STANDARDS["offloading_minimum_area_m2"],
             "must_connect_to_yard": True,
             "must_connect_to_roadway": True,
             "sliding_gate_size_m": [7.0, 2.4],
@@ -79,9 +84,10 @@ cashbuild_spec = {
             "category": "primary",
             "group": "customer",
             "required": True,
-            "target_area_m2": 1200,
-            "min_area_m2": 1080,
-            "preferred_width_depth_m": [30, 36],
+            "target_area_m2": STANDARDS["trading_ideal_area_m2"],
+            "min_area_m2": STANDARDS["trading_minimum_area_m2"],
+            "preferred_width_depth_m": STANDARDS["trading_preferred_dimensions_m"],
+            "compact_width_depth_m": STANDARDS["trading_compact_dimensions_m"],
             "aspect_ratio_range": [0.75, 1.5],
             "must_touch": ["front_customer_edge"],
             "prefer_touch": ["front_loading_edge"],
@@ -218,7 +224,7 @@ cashbuild_spec = {
             "category": "site_service",
             "group": "external_service",
             "required": True,
-            "min_area_m2": 900,
+            "min_area_m2": STANDARDS["yard_minimum_area_m2"],
             "must_touch": ["service_edge"],
             "adjacent_to": ["goods_receiving", "off_loading_area"],
             "contains": [
@@ -234,7 +240,7 @@ cashbuild_spec = {
             "category": "site_service",
             "group": "external_service",
             "required": True,
-            "min_area_m2": 450,
+            "min_area_m2": STANDARDS["offloading_minimum_area_m2"],
             "must_touch": ["roadway_edge", "yard_edge"],
             "adjacent_to": ["yard_area", "goods_receiving"],
             "special_rules": [
