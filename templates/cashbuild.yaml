@@ -1,0 +1,41 @@
+project: Cashbuild Generator
+
+zone_standards:
+  trading:
+    ideal_area_m2: 1200
+    minimum_area_m2: 1080
+    preferred_dimensions_mm:
+      width: 30000
+      depth: 36000
+    compact_dimensions_mm:
+      width: 23200
+      depth: 35650
+
+  admin_block:
+    target_area_m2: 130
+    preferred_depth_mm:
+      minimum: 6050
+      maximum: 6385
+
+  goods_receiving:
+    preferred_band_depth_mm: 6230
+    target_area_m2: 130
+
+  yard:
+    minimum_area_m2: 900
+    preferred_shape: l_shape
+
+  offloading:
+    minimum_area_m2: 450
+    preferred_relationship: attached_to_yard
+
+  parking:
+    strategy: flexible
+
+generator_priorities:
+  - fit_trading_first
+  - place_admin_block_from_selected_wall
+  - attach_goods_receiving_to_admin_and_trading
+  - place_yard_on_service_side
+  - attach_offloading_to_yard
+  - keep_remaining_circulation_clear
