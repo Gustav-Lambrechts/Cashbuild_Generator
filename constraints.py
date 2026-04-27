@@ -11,16 +11,9 @@ SPACE_BY_NAME = {space["name"]: space for space in cashbuild_spec["spaces"]}
 TARGET_AREAS_M2 = {
     "Trading Area": cashbuild_spec["global_rules"]["structure"]["trading_floor_target_internal_area_m2"],
     "Admin Block": cashbuild_spec["global_rules"]["admin_block"]["target_area_m2"],
-    "Yard": 800.0,
-    "Off-loading Yard": 400.0,
+    "Yard": cashbuild_spec["global_rules"]["yard"]["minimum_area_m2"],
+    "Off-loading Yard": cashbuild_spec["global_rules"]["off_loading"]["minimum_area_m2"],
     "Parking": 550.0,
-}
-ADMIN_ROOM_LABELS = {
-    "Passage",
-    "Cash Office",
-    "Male Toilets / Change",
-    "Female Toilets / Change",
-    "Canteen",
 }
 MIN_DIMENSIONS_M = {
     "Trading Area": {"width": 10.0, "depth": 10.0},
@@ -133,11 +126,18 @@ def compactness_score(rectangle: Rectangle) -> float:
 
 
 def trading_breadth_score(rectangle: Rectangle, entrance_side: str) -> float:
+    preferred_width, preferred_depth = cashbuild_spec["global_rules"]["structure"]["trading_floor_preferred_dimensions_m"]
+    preferred_score = (
+        min(rectangle.width / max(preferred_width, EPSILON), preferred_width / max(rectangle.width, EPSILON))
+        + min(rectangle.depth / max(preferred_depth, EPSILON), preferred_depth / max(rectangle.depth, EPSILON))
+    ) / 2.0
+
     if entrance_side in {"north", "south"}:
         ratio = rectangle.width / max(rectangle.depth, EPSILON)
     else:
         ratio = rectangle.depth / max(rectangle.width, EPSILON)
-    return min(1.0, max(0.0, ratio / 3.0))
+    breadth_score = min(1.0, max(0.0, ratio / 3.0))
+    return min(1.0, max(breadth_score, preferred_score))
 
 
 def make_check(rule: str, passed: bool, detail: str, category: str = "hard") -> dict[str, object]:
@@ -146,16 +146,7 @@ def make_check(rule: str, passed: bool, detail: str, category: str = "hard") -> 
 
 def is_allowed_overlap(rect_a: Rectangle, rect_b: Rectangle) -> bool:
     labels = {rect_a.label, rect_b.label}
-    return "Admin Block" in labels and bool(labels.intersection(ADMIN_ROOM_LABELS))
-
-
-def room_inside_parent(room: Rectangle, parent: Rectangle) -> bool:
-    return (
-        room.x >= parent.x - EPSILON
-        and room.y >= parent.y - EPSILON
-        and room.right <= parent.right + EPSILON
-        and room.top <= parent.top + EPSILON
-    )
+    return "Trading Area" in labels and any(label.startswith("POS Zone") for label in labels)
 
 
 def validate_layout(
@@ -179,17 +170,14 @@ def validate_layout(
     yard = rectangle_map["Yard"]
     offloading = rectangle_map["Off-loading Yard"]
     parking = rectangle_map["Parking"]
-    admin_rooms = [rectangle_map[label] for label in ADMIN_ROOM_LABELS if label in rectangle_map]
+    admin_target = cashbuild_spec["global_rules"]["admin_block"]["target_area_m2"]
+    admin_difference = abs(admin.area - admin_target)
 
-    internal_rectangles = [rectangle for rectangle in rectangles if rectangle.internal] + pos_zones
+    internal_rectangles = [trading] + pos_zones
     external_rectangles = [rectangle for rectangle in rectangles if not rectangle.internal]
     floor_rectangles = rectangles + pos_zones
     building_area = building_width * building_depth
-    actual_internal_area = sum(
-        rectangle.area
-        for rectangle in rectangles
-        if rectangle.internal and rectangle.label not in ADMIN_ROOM_LABELS
-    )
+    actual_internal_area = trading.area
 
     checks.append(
         make_check(
@@ -204,9 +192,9 @@ def validate_layout(
 
     checks.append(
         make_check(
-            "Internal spaces fit inside the building footprint",
-            all(within_building(rectangle, building_width, building_depth) for rectangle in internal_rectangles),
-            "Trading, admin, receiving, and POS spaces stay inside the building footprint.",
+            "Trading Area matches the entered shop size",
+            within_building(trading, building_width, building_depth),
+            "The entered width and depth define the Trading Area rectangle directly.",
         )
     )
 
@@ -234,7 +222,7 @@ def validate_layout(
         make_check(
             "Rectangles do not overlap",
             not overlaps_found,
-            "Planning blocks stay separate except for admin rooms packed inside the admin block.",
+            "Macro planning blocks stay separate and do not overlap one another.",
         )
     )
 
@@ -251,34 +239,33 @@ def validate_layout(
 
     checks.append(
         make_check(
-            "Trading Area touches Admin Block",
-            share_edge(trading, admin),
-            "The admin block is attached directly to the trading area.",
+            "Admin Block sits outside Trading Area and touches it",
+            share_edge(trading, admin) and not overlaps(trading, admin),
+            "Admin Block should attach outside the Trading Area without reducing it.",
         )
     )
 
     checks.append(
         make_check(
-            "Goods Receiving touches Trading Area",
-            share_edge(trading, receiving),
-            "Goods receiving stays directly connected to the trading floor.",
+            "Goods Receiving sits outside Trading Area and touches it",
+            share_edge(trading, receiving) and not overlaps(trading, receiving),
+            "Goods Receiving should attach outside the Trading Area without reducing it.",
         )
     )
 
     checks.append(
         make_check(
-            "Goods Receiving touches service side",
-            touches_boundary(receiving, service_side, building_width, building_depth),
-            "Goods receiving sits on the service-facing side of the building.",
+            "Admin Block touches Goods Receiving",
+            share_edge(admin, receiving),
+            "Admin Block and Goods Receiving should form one attached macro band.",
         )
     )
 
     checks.append(
         make_check(
-            "Yard aligns with Goods Receiving",
-            touches_building_side(yard, service_side, building_width, building_depth)
-            and projection_overlap_on_side(yard, receiving, service_side) > EPSILON,
-            "The yard is outside the service side and lines up with goods receiving.",
+            "Yard sits on the service side",
+            touches_building_side(yard, service_side, building_width, building_depth),
+            "The yard remains external and is based on the selected service side.",
         )
     )
 
@@ -300,31 +287,17 @@ def validate_layout(
 
     checks.append(
         make_check(
-            "Admin rooms stay inside the Admin Block",
-            all(room_inside_parent(room, admin) for room in admin_rooms),
-            "Passage, cash office, toilets/change rooms, and canteen pack inside the admin block.",
+            "Admin Block stays clear of Trading Area and Yard",
+            not overlaps(admin, yard) and not overlaps(admin, offloading) and not overlaps(admin, trading),
+            "Admin Block should not conflict badly with the Trading Area or external yards.",
         )
     )
 
-    checks.append(
-        make_check(
-            "Admin rooms share walls tightly",
-            len(admin_rooms) == 5,
-            "The simplified schema layout uses a fully packed five-room admin arrangement.",
-            category="quality",
-        )
-    )
-
-    internal_area_reduced = actual_internal_area + EPSILON < requested_internal_area
     detail = (
-        f"Internal blocks total {actual_internal_area:.1f} m² against a requested {requested_internal_area:.1f} m²."
-        if not internal_area_reduced
-        else (
-            f"Internal blocks were reduced to {actual_internal_area:.1f} m² from the requested "
-            f"{requested_internal_area:.1f} m². {reduction_reason or 'The building footprint could not hold the full target cleanly.'}"
-        )
+        f"Trading Area is locked to the entered shop size at {trading.area:.1f} m². "
+        f"{reduction_reason or ''}".strip()
     )
-    checks.append(make_check("Internal area fit summary", not internal_area_reduced, detail, category="quality"))
+    checks.append(make_check("Internal area fit summary", True, detail, category="quality"))
 
     checks.append(
         make_check(
@@ -340,6 +313,48 @@ def validate_layout(
             "External service cluster stays compact",
             compactness_score(yard) >= 0.3 and compactness_score(offloading) >= 0.2,
             "Yard and off-loading are kept as practical attached rectangles.",
+            category="quality",
+        )
+    )
+
+    checks.append(
+        make_check(
+            "Yard meets latest area target",
+            yard.area + EPSILON >= cashbuild_spec["global_rules"]["yard"]["minimum_area_m2"],
+            (
+                f"Yard is {yard.area:.1f} m² against a "
+                f"{cashbuild_spec['global_rules']['yard']['minimum_area_m2']:.1f} m² minimum."
+            ),
+            category="quality",
+        )
+    )
+
+    checks.append(
+        make_check(
+            "Off-loading Yard meets latest area target",
+            offloading.area + EPSILON >= cashbuild_spec["global_rules"]["off_loading"]["minimum_area_m2"],
+            (
+                f"Off-loading Yard is {offloading.area:.1f} m² against a "
+                f"{cashbuild_spec['global_rules']['off_loading']['minimum_area_m2']:.1f} m² minimum."
+            ),
+            category="quality",
+        )
+    )
+
+    checks.append(
+        make_check(
+            "Admin Block stays near target area",
+            admin_difference <= 20.0,
+            f"Admin Block is {admin.area:.1f} m² against a {admin_target:.1f} m² target.",
+            category="quality",
+        )
+    )
+
+    checks.append(
+        make_check(
+            "Macro zones are ready for future Stage 2 detailing",
+            True,
+            "Stage 1 stops at Trading Area, Admin Block, and Goods Receiving so later micro-layout generation can happen inside those macro zones.",
             category="quality",
         )
     )
@@ -365,29 +380,51 @@ def score_layout(rectangles: list[Rectangle], checks: list[dict[str, object]], e
     offloading = rectangle_map["Off-loading Yard"]
     parking = rectangle_map["Parking"]
 
-    hard_checks = [check for check in checks if check["category"] == "hard"]
-    hard_pass_rate = sum(bool(check["passed"]) for check in hard_checks) / max(len(hard_checks), 1)
-
     adjacency_checks = [
         check
         for check in checks
         if check["rule"] in {
-            "Trading Area touches Admin Block",
-            "Goods Receiving touches Trading Area",
-            "Yard aligns with Goods Receiving",
+            "Admin Block sits outside Trading Area and touches it",
+            "Goods Receiving sits outside Trading Area and touches it",
+            "Admin Block touches Goods Receiving",
             "Off-loading Yard touches Yard",
         }
     ]
     adjacency_score = sum(bool(check["passed"]) for check in adjacency_checks) / max(len(adjacency_checks), 1)
 
+    access_checks = [
+        check
+        for check in checks
+        if check["rule"] in {
+            "Frontage opening sequence fits on the entrance wall",
+            "Yard sits on the service side",
+            "Parking sits on the entrance side",
+            "Trading Area matches the entered shop size",
+            "External spaces stay outside the building footprint",
+        }
+    ]
+    access_score = sum(bool(check["passed"]) for check in access_checks) / max(len(access_checks), 1)
+
+    non_overlap_checks = [check for check in checks if check["rule"] == "Rectangles do not overlap"]
+    non_overlap_score = sum(bool(check["passed"]) for check in non_overlap_checks) / max(len(non_overlap_checks), 1)
+
+    trading_dominance_checks = [check for check in checks if check["rule"] == "Trading Area stays dominant"]
+    trading_dominance_score = sum(bool(check["passed"]) for check in trading_dominance_checks) / max(len(trading_dominance_checks), 1)
+
     proportion_score = (
-        trading_breadth_score(trading, entrance_side) * 0.45
+        trading_breadth_score(trading, entrance_side) * 0.50
         + compactness_score(admin) * 0.15
         + compactness_score(receiving) * 0.15
         + compactness_score(yard) * 0.10
-        + compactness_score(offloading) * 0.10
+        + compactness_score(offloading) * 0.05
         + compactness_score(parking) * 0.05
     )
 
-    score = adjacency_score * 45.0 + proportion_score * 35.0 + hard_pass_rate * 20.0
+    score = (
+        adjacency_score * 28.0
+        + access_score * 22.0
+        + proportion_score * 22.0
+        + non_overlap_score * 14.0
+        + trading_dominance_score * 14.0
+    )
     return round(score, 1)

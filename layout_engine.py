@@ -4,7 +4,9 @@ from cashbuild_spec import cashbuild_spec
 from constraints import Rectangle, TARGET_AREAS_M2, score_layout, validate_layout
 
 SIDES = ["north", "south", "east", "west"]
+POSITIONS = ["left", "middle", "right"]
 EPSILON = 1e-6
+BAND_DEPTH_M = 6.23
 
 SPACE_BY_NAME = {space["name"]: space for space in cashbuild_spec["spaces"]}
 
@@ -23,15 +25,6 @@ POS_ZONE_DEPTH_M = 2.4
 # The schema leaves some room sizes open-ended. For the MVP we use a simple,
 # readable split that respects adjacency intent without pretending to be a full
 # building-code engine yet.
-SIMPLIFIED_ROOM_SHARES = {
-    "Passage": 0.18,
-    "Cash Office": 0.22,
-    "Male Toilets / Change": 0.20,
-    "Female Toilets / Change": 0.20,
-    "Canteen": 0.20,
-}
-
-
 def mm_to_m(value_mm: float) -> float:
     return value_mm / 1000.0
 
@@ -222,25 +215,7 @@ def build_frontage_context(building_width: float, building_depth: float, entranc
 
 
 def base_internal_rect(building_width: float, building_depth: float, entrance_side: str, support_depth: float) -> Rectangle:
-    if entrance_side == "north":
-        return Rectangle("Trading Area", 0.0, 0.0, building_width, building_depth - support_depth, True)
-    if entrance_side == "south":
-        return Rectangle("Trading Area", 0.0, support_depth, building_width, building_depth - support_depth, True)
-    if entrance_side == "east":
-        return Rectangle("Trading Area", 0.0, 0.0, building_width - support_depth, building_depth, True)
-    return Rectangle("Trading Area", support_depth, 0.0, building_width - support_depth, building_depth, True)
-
-
-def choose_admin_side(entrance_side: str, service_side: str, option: dict[str, object]) -> str:
-    if entrance_side in {"north", "south"}:
-        candidates = ["west", "east"]
-    else:
-        candidates = ["south", "north"]
-
-    ordered = [side for side in candidates if side != service_side] + [side for side in candidates if side == service_side]
-    if option["admin_side_priority"] == "far_end":
-        ordered.reverse()
-    return ordered[0]
+    return Rectangle("Trading Area", 0.0, 0.0, building_width, building_depth, True)
 
 
 def trade_target_area() -> float:
@@ -262,16 +237,6 @@ def receiving_target_area(building_width: float, building_depth: float) -> float
     return min(preferred, max(70.0, 0.08 * building_width * building_depth))
 
 
-def admin_strip_thickness(seed_rect: Rectangle, admin_side: str, option: dict[str, object]) -> float:
-    target_area = admin_target_area()
-    shape_factor = option["admin_shape_factor"]
-    if admin_side in {"east", "west"}:
-        thickness = (target_area / max(seed_rect.depth, 1.0)) * shape_factor
-        return clamp(thickness, 4.2, max(4.2, seed_rect.width * 0.32))
-    thickness = (target_area / max(seed_rect.width, 1.0)) * shape_factor
-    return clamp(thickness, 4.2, max(4.2, seed_rect.depth * 0.32))
-
-
 def receiving_strip_thickness(seed_rect: Rectangle, service_side: str, building_width: float, building_depth: float) -> float:
     target_area = receiving_target_area(building_width, building_depth)
     if service_side in {"north", "south"}:
@@ -279,20 +244,173 @@ def receiving_strip_thickness(seed_rect: Rectangle, service_side: str, building_
     return clamp(target_area / max(seed_rect.depth, 1.0), 4.0, max(4.0, seed_rect.width * 0.22))
 
 
-def carve_edge(rectangle: Rectangle, side: str, thickness: float, label: str, internal: bool) -> tuple[Rectangle, Rectangle]:
-    if side == "west":
-        strip = Rectangle(label, rectangle.x, rectangle.y, thickness, rectangle.depth, internal)
-        kept = Rectangle(rectangle.label, rectangle.x + thickness, rectangle.y, rectangle.width - thickness, rectangle.depth, rectangle.internal)
-    elif side == "east":
-        strip = Rectangle(label, rectangle.right - thickness, rectangle.y, thickness, rectangle.depth, internal)
-        kept = Rectangle(rectangle.label, rectangle.x, rectangle.y, rectangle.width - thickness, rectangle.depth, rectangle.internal)
-    elif side == "south":
-        strip = Rectangle(label, rectangle.x, rectangle.y, rectangle.width, thickness, internal)
-        kept = Rectangle(rectangle.label, rectangle.x, rectangle.y + thickness, rectangle.width, rectangle.depth - thickness, rectangle.internal)
+def wall_position_local_start(wall_length: float, item_length: float, position: str) -> float:
+    free_space = max(0.0, wall_length - item_length)
+    if position == "left":
+        return 0.0
+    if position == "right":
+        return free_space
+    return free_space / 2.0
+
+
+def side_along_length(side: str, building_width: float, building_depth: float) -> float:
+    return building_width if side in {"north", "south"} else building_depth
+
+
+def preferred_trading_dimensions() -> tuple[float, float]:
+    preferred = cashbuild_spec["global_rules"]["structure"]["trading_floor_preferred_dimensions_m"]
+    return float(preferred[0]), float(preferred[1])
+
+
+def local_start_to_world_offset(
+    side: str,
+    local_start: float,
+    along_size: float,
+    building_width: float,
+    building_depth: float,
+) -> float:
+    if side == "north":
+        return local_start
+    if side == "south":
+        return building_width - local_start - along_size
+    if side == "east":
+        return building_depth - local_start - along_size
+    return local_start
+
+
+def place_rectangle_outside_trading(
+    label: str,
+    side: str,
+    local_start: float,
+    band_depth: float,
+    along_size: float,
+    building_width: float,
+    building_depth: float,
+    internal: bool,
+) -> Rectangle:
+    if side == "north":
+        x = local_start_to_world_offset(side, local_start, along_size, building_width, building_depth)
+        return Rectangle(label, x, building_depth, along_size, band_depth, internal)
+    if side == "south":
+        x = local_start_to_world_offset(side, local_start, along_size, building_width, building_depth)
+        return Rectangle(label, x, -band_depth, along_size, band_depth, internal)
+    if side == "east":
+        y = local_start_to_world_offset(side, local_start, along_size, building_width, building_depth)
+        return Rectangle(label, building_width, y, band_depth, along_size, internal)
+    y = local_start_to_world_offset(side, local_start, along_size, building_width, building_depth)
+    return Rectangle(label, -band_depth, y, band_depth, along_size, internal)
+
+
+def opposite_position(position: str) -> str:
+    if position == "left":
+        return "right"
+    if position == "right":
+        return "left"
+    return "middle"
+
+
+def choose_receiving_position(service_side: str, admin_side: str, admin_position: str, option: dict[str, object]) -> list[str]:
+    preferred = option["receiving_position"]
+    if service_side != admin_side:
+        return [preferred, "middle", "left", "right"]
+    opposite = opposite_position(admin_position)
+    return [opposite, preferred, "middle", "left", "right"]
+
+
+def build_admin_and_receiving_band(
+    building_width: float,
+    building_depth: float,
+    admin_side: str,
+    admin_position: str,
+) -> tuple[Rectangle, Rectangle]:
+    wall_length = side_along_length(admin_side, building_width, building_depth)
+    admin_length = min(wall_length, admin_target_area() / BAND_DEPTH_M)
+    admin_local_start = wall_position_local_start(wall_length, admin_length, admin_position)
+
+    admin_block = place_rectangle_outside_trading(
+        "Admin Block",
+        admin_side,
+        admin_local_start,
+        BAND_DEPTH_M,
+        admin_length,
+        building_width,
+        building_depth,
+        True,
+    )
+
+    receiving_target_length = receiving_target_area(building_width, building_depth) / BAND_DEPTH_M
+    left_space = admin_local_start
+    right_space = max(0.0, wall_length - admin_local_start - admin_length)
+
+    if admin_position == "left":
+        preferred_side = "right"
+    elif admin_position == "right":
+        preferred_side = "left"
     else:
-        strip = Rectangle(label, rectangle.x, rectangle.top - thickness, rectangle.width, thickness, internal)
-        kept = Rectangle(rectangle.label, rectangle.x, rectangle.y, rectangle.width, rectangle.depth - thickness, rectangle.internal)
-    return kept, strip
+        preferred_side = "right" if right_space >= left_space else "left"
+
+    candidate_sides = [preferred_side, "left" if preferred_side == "right" else "right"]
+    receiving_local_start = 0.0
+    receiving_length = 0.0
+
+    for side_name in candidate_sides:
+        available = right_space if side_name == "right" else left_space
+        if available <= EPSILON:
+            continue
+        receiving_length = max(4.0, min(receiving_target_length, available))
+        if receiving_length > available + EPSILON:
+            receiving_length = available
+        if side_name == "right":
+            receiving_local_start = admin_local_start + admin_length
+        else:
+            receiving_local_start = admin_local_start - receiving_length
+        break
+
+    if receiving_length <= EPSILON:
+        fallback_length = max(4.0, min(receiving_target_length, wall_length))
+        receiving_length = min(wall_length, fallback_length)
+        receiving_local_start = wall_position_local_start(wall_length, receiving_length, "middle")
+
+    goods_receiving = place_rectangle_outside_trading(
+        "Goods Receiving",
+        admin_side,
+        receiving_local_start,
+        BAND_DEPTH_M,
+        receiving_length,
+        building_width,
+        building_depth,
+        True,
+    )
+    return admin_block, goods_receiving
+
+
+def trading_preference_summary(trading_area: Rectangle) -> str:
+    preferred_width, preferred_depth = preferred_trading_dimensions()
+    return (
+        f"Trading Area uses the entered shop size directly at {trading_area.width:.2f} m x {trading_area.depth:.2f} m. "
+        f"The preferred proportion is {preferred_width:.0f} m x {preferred_depth:.0f} m where possible."
+    )
+
+
+def choose_service_alignment_from_admin(
+    service_side: str,
+    admin_side: str,
+    admin_position: str,
+    fallback_alignment: str,
+) -> str:
+    if service_side == admin_side:
+        return fallback_alignment
+
+    if service_side in {"north", "south"} and admin_side in {"north", "south"}:
+        return fallback_alignment
+    if service_side in {"east", "west"} and admin_side in {"east", "west"}:
+        return fallback_alignment
+
+    if admin_position == "middle":
+        return "center"
+    if admin_position == "left":
+        return "start"
+    return "end"
 
 
 def build_site_rectangle(label: str, anchor: Rectangle, side: str, area: float, alignment: str, fixed_depth: float | None = None) -> Rectangle:
@@ -325,113 +443,33 @@ def build_parking(building_width: float, building_depth: float, entrance_side: s
     return Rectangle("Parking", -depth, 0.0, depth, building_depth, False)
 
 
-def subdivide_admin_block(admin_block: Rectangle, trading_side: str, receiving_side: str) -> list[Rectangle]:
-    """
-    Simple schema-driven admin packing:
-    - create the passage spine first on the side that connects back into trading
-    - attach the cash office near the receiving relationship
-    - fill the remaining two-by-two support rooms tightly with no internal gaps
-    """
-
-    rectangles: list[Rectangle] = []
-    shares = SIMPLIFIED_ROOM_SHARES
-
-    if admin_block.width >= admin_block.depth:
-        passage_depth = clamp(admin_block.depth * shares["Passage"], 1.5, admin_block.depth * 0.28)
-        passage_y = admin_block.y if trading_side == "south" else admin_block.top - passage_depth
-        passage = Rectangle("Passage", admin_block.x, passage_y, admin_block.width, passage_depth, True)
-        rectangles.append(passage)
-
-        usable_y = admin_block.y + passage_depth if trading_side == "south" else admin_block.y
-        usable_depth = admin_block.depth - passage_depth
-
-        cash_width = admin_block.width * 0.28
-        canteen_width = admin_block.width * 0.28
-        middle_width = admin_block.width - cash_width - canteen_width
-
-        if receiving_side == "west":
-            cash_x = admin_block.x
-            middle_x = cash_x + cash_width
-            canteen_x = middle_x + middle_width
-        else:
-            canteen_x = admin_block.x
-            middle_x = canteen_x + canteen_width
-            cash_x = middle_x + middle_width
-
-        half_depth = usable_depth / 2.0
-        rectangles.extend(
-            [
-                Rectangle("Cash Office", cash_x, usable_y, cash_width, usable_depth, True),
-                Rectangle("Male Toilets / Change", middle_x, usable_y + half_depth, middle_width, usable_depth - half_depth, True),
-                Rectangle("Female Toilets / Change", middle_x, usable_y, middle_width, half_depth, True),
-                Rectangle("Canteen", canteen_x, usable_y, canteen_width, usable_depth, True),
-            ]
-        )
-        return rectangles
-
-    passage_width = clamp(admin_block.width * shares["Passage"], 1.5, admin_block.width * 0.30)
-    passage_x = admin_block.x if trading_side == "west" else admin_block.right - passage_width
-    passage = Rectangle("Passage", passage_x, admin_block.y, passage_width, admin_block.depth, True)
-    rectangles.append(passage)
-
-    usable_x = admin_block.x + passage_width if trading_side == "west" else admin_block.x
-    usable_width = admin_block.width - passage_width
-
-    cash_depth = admin_block.depth * 0.28
-    canteen_depth = admin_block.depth * 0.28
-    middle_depth = admin_block.depth - cash_depth - canteen_depth
-
-    if receiving_side == "south":
-        cash_y = admin_block.y
-        middle_y = cash_y + cash_depth
-        canteen_y = middle_y + middle_depth
-    else:
-        canteen_y = admin_block.y
-        middle_y = canteen_y + canteen_depth
-        cash_y = middle_y + middle_depth
-
-    half_width = usable_width / 2.0
-    rectangles.extend(
-        [
-            Rectangle("Cash Office", usable_x, cash_y, usable_width, cash_depth, True),
-            Rectangle("Male Toilets / Change", usable_x + half_width, middle_y, usable_width - half_width, middle_depth, True),
-            Rectangle("Female Toilets / Change", usable_x, middle_y, half_width, middle_depth, True),
-            Rectangle("Canteen", usable_x, canteen_y, usable_width, canteen_depth, True),
-        ]
-    )
-    return rectangles
-
-
 def option_variants() -> list[dict[str, object]]:
     return [
         {
             "name": "Option 1",
             "summary": "Balanced admin edge with centered service yard.",
-            "admin_side_priority": "near_end",
             "yard_alignment": "center",
             "offloading_alignment": "end",
             "parking_alignment": "center",
-            "admin_shape_factor": 1.00,
+            "receiving_position": "middle",
             "parking_depth_m": 9.0,
         },
         {
             "name": "Option 2",
             "summary": "Admin block shifts to another edge and parking biases to one end.",
-            "admin_side_priority": "far_end",
             "yard_alignment": "end",
             "offloading_alignment": "center",
             "parking_alignment": "start",
-            "admin_shape_factor": 1.08,
+            "receiving_position": "left",
             "parking_depth_m": 10.0,
         },
         {
             "name": "Option 3",
             "summary": "Tighter admin proportion with a more compact service cluster.",
-            "admin_side_priority": "near_end",
             "yard_alignment": "start",
             "offloading_alignment": "start",
             "parking_alignment": "end",
-            "admin_shape_factor": 0.92,
+            "receiving_position": "right",
             "parking_depth_m": 8.5,
         },
     ]
@@ -440,7 +478,7 @@ def option_variants() -> list[dict[str, object]]:
 def package_option(
     name: str,
     summary: str,
-    rectangles: list[Rectangle],
+    macro_rectangles: list[Rectangle],
     pos_zones: list[Rectangle],
     frontage_openings: list[dict[str, object]],
     frontage_summary: dict[str, object],
@@ -448,18 +486,16 @@ def package_option(
     building_depth: float,
     entrance_side: str,
     service_side: str,
+    admin_block_side: str,
+    admin_block_position: str,
     requested_internal_area: float,
     reduction_reason: str,
 ) -> dict[str, object]:
-    actual_internal_area = sum(
-        rectangle.area
-        for rectangle in rectangles
-        if rectangle.internal and rectangle.label not in SIMPLIFIED_ROOM_SHARES
-    )
+    actual_internal_area = sum(rectangle.area for rectangle in macro_rectangles if rectangle.internal)
     building_area = building_width * building_depth
     fit_efficiency = (actual_internal_area / requested_internal_area) * 100.0 if requested_internal_area else 0.0
     checks = validate_layout(
-        rectangles,
+        macro_rectangles,
         pos_zones,
         frontage_openings,
         frontage_summary,
@@ -473,12 +509,24 @@ def package_option(
     return {
         "name": name,
         "summary": summary,
-        "rectangles": rectangles,
+        "rectangles": macro_rectangles,
+        "macro_rectangles": macro_rectangles,
+        "controls": {
+            "admin_block_side": admin_block_side,
+            "admin_block_position": admin_block_position,
+        },
         "pos_zones": pos_zones,
         "frontage_openings": frontage_openings,
         "frontage_summary": frontage_summary,
-        "score": score_layout(rectangles, checks, entrance_side),
+        "score": score_layout(macro_rectangles, checks, entrance_side),
         "checks": checks,
+        "stage": "Stage 1",
+        "stage_name": "Macro Layout Generator",
+        "stage_2_seed": {
+            "ready": True,
+            "message": "Future Stage 2 can place micro layouts inside the internal macro zones.",
+            "micro_layout_parent_zones": ["Trading Area", "Admin Block", "Goods Receiving"],
+        },
         "internal_summary": {
             "building_footprint_area_m2": round(building_area, 1),
             "requested_internal_area_m2": round(requested_internal_area, 1),
@@ -495,27 +543,35 @@ def build_candidate(
     building_depth: float,
     entrance_side: str,
     service_side: str,
+    admin_block_side: str,
+    admin_block_position: str,
     option: dict[str, object],
     frontage_context: dict[str, object],
 ) -> dict[str, object]:
-    requested_internal_area = trade_target_area() + admin_target_area() + receiving_target_area(building_width, building_depth)
+    requested_internal_area = building_width * building_depth
 
     # Schema-driven planning order:
-    # 1. dominant trading rectangle
-    # 2. admin block attached to one side
-    # 3. goods receiving as hinge to yard/off-loading
-    # 4. site zones outside the envelope
-    # 5. packed admin-room subdivision
-    internal_seed = base_internal_rect(building_width, building_depth, entrance_side, frontage_context["support_depth_m"])
-    admin_side = choose_admin_side(entrance_side, service_side, option)
-    trading_side_for_admin = "east" if admin_side == "west" else "west" if admin_side == "east" else "north" if admin_side == "south" else "south"
-    admin_thickness = admin_strip_thickness(internal_seed, admin_side, option)
-    trading_seed, admin_block = carve_edge(internal_seed, admin_side, admin_thickness, "Admin Block", True)
+    # 1. lock Trading Area to the entered shop width and depth
+    # 2. attach an Admin + Goods Receiving band outside the selected wall
+    # 3. place Yard on the service side without reducing Trading Area
+    # 4. attach Off-loading Yard to Yard
+    # Stage 1 stops here and leaves micro-layout subdivision for a future Stage 2.
+    trading_area = base_internal_rect(building_width, building_depth, entrance_side, 0.0)
+    admin_block, goods_receiving = build_admin_and_receiving_band(
+        building_width=building_width,
+        building_depth=building_depth,
+        admin_side=admin_block_side,
+        admin_position=admin_block_position,
+    )
 
-    receiving_thickness = receiving_strip_thickness(trading_seed, service_side, building_width, building_depth)
-    trading_area, goods_receiving = carve_edge(trading_seed, service_side, receiving_thickness, "Goods Receiving", True)
-
-    yard = build_site_rectangle("Yard", goods_receiving, service_side, TARGET_AREAS_M2["Yard"], option["yard_alignment"])
+    yard_anchor = trading_area
+    yard_alignment = choose_service_alignment_from_admin(
+        service_side=service_side,
+        admin_side=admin_block_side,
+        admin_position=admin_block_position,
+        fallback_alignment=option["yard_alignment"],
+    )
+    yard = build_site_rectangle("Yard", yard_anchor, service_side, TARGET_AREAS_M2["Yard"], yard_alignment)
     offloading = build_site_rectangle(
         "Off-loading Yard",
         yard,
@@ -524,17 +580,18 @@ def build_candidate(
         option["offloading_alignment"],
     )
     parking = build_parking(building_width, building_depth, entrance_side, option)
-    admin_rooms = subdivide_admin_block(admin_block, trading_side_for_admin, service_side)
 
     reduction_reason = (
-        "The schema leaves some support-room sizes open-ended, so the MVP uses a packed rectangular "
-        "admin arrangement and a practical receiving band sized from the overall shell."
+        "Stage 1 uses the entered shop width and depth as the Trading Area itself. "
+        "Admin Block, Goods Receiving, Yard, and Off-loading attach around that anchor geometry."
     )
+
+    macro_rectangles = [trading_area, admin_block, goods_receiving, yard, offloading, parking]
 
     return package_option(
         name=option["name"],
         summary=option["summary"],
-        rectangles=[trading_area, admin_block, goods_receiving, yard, offloading, parking, *admin_rooms],
+        macro_rectangles=macro_rectangles,
         pos_zones=frontage_context["pos_zones"],
         frontage_openings=frontage_context["openings"],
         frontage_summary=frontage_context,
@@ -542,6 +599,8 @@ def build_candidate(
         building_depth=building_depth,
         entrance_side=entrance_side,
         service_side=service_side,
+        admin_block_side=admin_block_side,
+        admin_block_position=admin_block_position,
         requested_internal_area=requested_internal_area,
         reduction_reason=reduction_reason,
     )
@@ -552,10 +611,50 @@ def generate_layout_options(
     building_depth_m: float,
     entrance_side: str,
     service_side: str,
+    admin_block_side: str | None = None,
+    admin_block_position: str | None = None,
 ) -> list[dict[str, object]]:
+    selected_admin_side = admin_block_side if admin_block_side in SIDES else service_side
+    selected_admin_position = admin_block_position if admin_block_position in POSITIONS else "middle"
     frontage_context = build_frontage_context(building_width_m, building_depth_m, entrance_side)
     options = [
-        build_candidate(building_width_m, building_depth_m, entrance_side, service_side, option, frontage_context)
+        build_candidate(
+            building_width_m,
+            building_depth_m,
+            entrance_side,
+            service_side,
+            selected_admin_side,
+            selected_admin_position,
+            option,
+            frontage_context,
+        )
         for option in option_variants()
     ]
     return sorted(options, key=lambda option: option["score"], reverse=True)
+
+
+def generate_best_layout(
+    building_width_m: float,
+    building_depth_m: float,
+    entrance_side: str,
+    service_side: str,
+    admin_block_side: str | None = None,
+    admin_block_position: str | None = None,
+) -> dict[str, object]:
+    """
+    Keep the existing ranked option logic, but return only the best macro layout
+    for the simplified MVP flow.
+    """
+
+    best_option = generate_layout_options(
+        building_width_m=building_width_m,
+        building_depth_m=building_depth_m,
+        entrance_side=entrance_side,
+        service_side=service_side,
+        admin_block_side=admin_block_side,
+        admin_block_position=admin_block_position,
+    )[0]
+    return {
+        **best_option,
+        "name": "Best Macro Layout",
+    }

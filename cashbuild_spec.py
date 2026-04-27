@@ -47,6 +47,7 @@ cashbuild_spec = {
 
         "yard": {
             "required": True,
+            "minimum_area_m2": 900,
             "must_be_fenced": True,
             "minimum_fence_height_m": 2.4,
             "bin_area_min_m2": 17,
@@ -59,6 +60,7 @@ cashbuild_spec = {
 
         "off_loading": {
             "required": True,
+            "minimum_area_m2": 450,
             "must_connect_to_yard": True,
             "must_connect_to_roadway": True,
             "sliding_gate_size_m": [7.0, 2.4],
@@ -216,6 +218,7 @@ cashbuild_spec = {
             "category": "site_service",
             "group": "external_service",
             "required": True,
+            "min_area_m2": 900,
             "must_touch": ["service_edge"],
             "adjacent_to": ["goods_receiving", "off_loading_area"],
             "contains": [
@@ -231,6 +234,7 @@ cashbuild_spec = {
             "category": "site_service",
             "group": "external_service",
             "required": True,
+            "min_area_m2": 450,
             "must_touch": ["roadway_edge", "yard_edge"],
             "adjacent_to": ["yard_area", "goods_receiving"],
             "special_rules": [
